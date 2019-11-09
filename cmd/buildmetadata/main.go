@@ -268,19 +268,30 @@ func buildMetadata() *phonenumbers.PhoneMetadataCollection {
 func generateBinFile(variableName string, data []byte) []byte {
 	var compressed bytes.Buffer
 	w := gzip.NewWriter(&compressed)
-	w.Write(data)
-	w.Close()
+	_, _ = w.Write(data)
+	_ = w.Close()
 	encoded := base64.StdEncoding.EncodeToString(compressed.Bytes())
 
 	// create our output
 	output := &bytes.Buffer{}
 
 	// write our header
-	output.WriteString("package phonenumbers\n\nvar ")
-	output.WriteString(variableName)
-	output.WriteString(" = ")
+	_, _ = fmt.Fprintf(output, `package phonenumbers
+
+import (
+	"sync/atomic"
+)
+
+var _%s atomic.Value
+
+func get%s() string {
+	if _%s.Load() == nil {
+		_%s.Store(`, variableName, strings.Title(variableName), variableName, variableName)
 	output.WriteString(strconv.Quote(string(encoded)))
-	output.WriteString("\n")
+	_, _ = fmt.Fprintf(output, `)
+	}
+	return _%s.Load().(string)
+}`, variableName)
 	return output.Bytes()
 }
 
@@ -315,8 +326,18 @@ func buildPrefixData(build *prefixBuild) {
 	}
 
 	output := bytes.Buffer{}
-	output.WriteString("package phonenumbers\n\n")
-	output.WriteString(fmt.Sprintf("var %s = map[string]string {\n", build.varName))
+	_, _ = fmt.Fprintf(&output, `package phonenumbers
+
+import (
+	"sync/atomic"
+)
+
+var _%s atomic.Value
+
+func get%s() map[string]string {
+	if _%s.Load() == nil {
+		_%s.Store(`, build.varName, strings.Title(build.varName), build.varName, build.varName)
+	output.WriteString("map[string]string {\n")
 
 	for lang, mappings := range languageMappings {
 		// iterate through our map, creating our full set of values and prefixes
@@ -397,7 +418,11 @@ func buildPrefixData(build *prefixBuild) {
 		output.WriteString(",\n")
 	}
 
-	output.WriteString("}")
+	_, _ = fmt.Fprintf(&output, `})
+	}
+	return _%s.Load().(map[string]string)
+}`, build.varName)
+
 	writeFile(build.srcPath, output.Bytes())
 }
 
