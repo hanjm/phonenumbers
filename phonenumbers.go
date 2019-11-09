@@ -2,12 +2,13 @@ package phonenumbers
 
 import (
 	"errors"
-	fmt "fmt"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/golang/protobuf/proto"
@@ -543,12 +544,12 @@ var (
 
 	// The set of regions that share country calling code 1.
 	// There are roughly 26 regions.
-	nanpaRegions = make(map[string]struct{})
+	_nanpaRegions atomic.Value // = make(map[string]struct{})
 
 	// A mapping from a region code to the PhoneMetadata for that region.
 	// Note: Synchronization, though only needed for the Android version
 	// of the library, is used in all versions for consistency.
-	regionToMetadataMap = make(map[string]*PhoneMetadata)
+	_regionToMetadataMap atomic.Value // = make(map[string]*PhoneMetadata)
 
 	// A mapping from a country calling code for a non-geographical
 	// entity to the PhoneMetadata for that country calling code.
@@ -556,7 +557,7 @@ var (
 	// Toll Free Service) and 808 (International Shared Cost Service).
 	// Note: Synchronization, though only needed for the Android version
 	// of the library, is used in all versions for consistency.
-	countryCodeToNonGeographicalMetadataMap = make(map[int]*PhoneMetadata)
+	_countryCodeToNonGeographicalMetadataMap atomic.Value // = make(map[int]*PhoneMetadata)
 
 	// A cache for frequently used region-specific regular expressions.
 	// The initial capacity is set to 100 as this seems to be an optimal
@@ -567,31 +568,67 @@ var (
 	// The set of regions the library supports.
 	// There are roughly 240 of them and we set the initial capacity of
 	// the HashSet to 320 to offer a load factor of roughly 0.75.
-	supportedRegions = make(map[string]bool, 320)
+	_supportedRegions atomic.Value // = make(map[string]bool, 320)
 
 	// The set of calling codes that map to the non-geo entity
 	// region ("001"). This set currently contains < 12 elements so the
 	// default capacity of 16 (load factor=0.75) is fine.
-	countryCodesForNonGeographicalRegion = make(map[int]bool, 16)
+	_countryCodesForNonGeographicalRegion atomic.Value // = make(map[int]bool, 16)
 
-	// These are our onces and maps for our prefix to carrier maps
-	carrierOnces     = make(map[string]*sync.Once)
-	carrierPrefixMap = make(map[string]*intStringMap)
+	// carrierPrefixMap is maps for our prefix to carrier maps
+	_carrierPrefixMap atomic.Value // = make(map[string]*intStringMap)
 
-	// These are our onces and maps for our prefix to geocoding maps
-	geocodingOnces     = make(map[string]*sync.Once)
-	geocodingPrefixMap = make(map[string]*intStringMap)
+	// _geocodingPrefixMap is maps for our prefix to geocoding maps
+	_geocodingPrefixMap atomic.Value //  = make(map[string]*intStringMap)
 
 	// All the calling codes we support
-	supportedCallingCodes = make(map[int]bool, 320)
+	_supportedCallingCodes atomic.Value // = make(map[int]bool, 320)
 
-	// Our once and map for prefix to timezone lookups
-	timezoneOnce sync.Once
-	timezoneMap  *intStringArrayMap
+	_timezoneMap atomic.Value // *intStringArrayMap
 
 	// Our map from country code (as integer) to two letter region codes
-	countryCodeToRegion map[int][]string
+	_countryCodeToRegion atomic.Value // map[int][]string
 )
+
+func getNnanpaRegions() map[string]struct{} {
+	return _nanpaRegions.Load().(map[string]struct{})
+}
+
+func getRegionToMetadataMap() map[string]*PhoneMetadata {
+	return _regionToMetadataMap.Load().(map[string]*PhoneMetadata)
+}
+
+func getCountryCodeToNonGeographicalMetadataMap() map[int]*PhoneMetadata {
+	return _countryCodeToNonGeographicalMetadataMap.Load().(map[int]*PhoneMetadata)
+}
+
+func getSupportedRegions() map[string]bool {
+	return _supportedRegions.Load().(map[string]bool)
+}
+
+func getCountryCodesForNonGeographicalRegion() map[int]bool {
+	return _countryCodesForNonGeographicalRegion.Load().(map[int]bool)
+}
+
+func getCarrierPrefixMap() map[string]*intStringMap {
+	return _carrierPrefixMap.Load().(map[string]*intStringMap)
+}
+
+func getGeocodingPrefixMap() map[string]*intStringMap {
+	return _geocodingPrefixMap.Load().(map[string]*intStringMap)
+}
+
+func getSupportedCallingCodes() map[int]bool {
+	return _supportedCallingCodes.Load().(map[int]bool)
+}
+
+func getTimezoneMap() *intStringArrayMap {
+	return _timezoneMap.Load().(*intStringArrayMap)
+}
+
+func getCountryCodeToRegion() map[int][]string {
+	return _countryCodeToRegion.Load().(map[int][]string)
+}
 
 var ErrEmptyMetadata = errors.New("empty metadata")
 
@@ -618,78 +655,40 @@ func regexFor(pattern string) *regexp.Regexp {
 }
 
 func readFromNanpaRegions(key string) (struct{}, bool) {
-	v, ok := nanpaRegions[key]
+	v, ok := getNnanpaRegions()[key]
 	return v, ok
-}
-
-func writeToNanpaRegions(key string, val struct{}) {
-	nanpaRegions[key] = val
 }
 
 func readFromRegionToMetadataMap(key string) (*PhoneMetadata, bool) {
-	v, ok := regionToMetadataMap[key]
+	v, ok := getRegionToMetadataMap()[key]
 	return v, ok
-}
-
-func writeToRegionToMetadataMap(key string, val *PhoneMetadata) {
-	regionToMetadataMap[key] = val
 }
 
 func readFromCountryCodeToNonGeographicalMetadataMap(key int) (*PhoneMetadata, bool) {
-	v, ok := countryCodeToNonGeographicalMetadataMap[key]
+	v, ok := getCountryCodeToNonGeographicalMetadataMap()[key]
 	return v, ok
 }
 
-func writeToCountryCodeToNonGeographicalMetadataMap(key int, v *PhoneMetadata) {
-	countryCodeToNonGeographicalMetadataMap[key] = v
-}
-
-func loadMetadataFromFile(
-	regionCode string,
-	countryCallingCode int) error {
-
-	metadataCollection, err := MetadataCollection()
-	if err != nil {
-		return err
-	} else if currMetadataColl == nil {
-		currMetadataColl = metadataCollection
-	}
-
-	metadataList := metadataCollection.GetMetadata()
-	if len(metadataList) == 0 {
-		return ErrEmptyMetadata
-	}
-
-	for _, meta := range metadataList {
-		region := meta.GetId()
-		if region == "001" {
-			// it's a non geographical entity
-			writeToCountryCodeToNonGeographicalMetadataMap(int(meta.GetCountryCode()), meta)
-		} else {
-			writeToRegionToMetadataMap(region, meta)
-		}
-	}
-	return nil
-}
-
 var (
-	currMetadataColl *PhoneMetadataCollection
-	reloadMetadata   = true
+	_currMetadataColl atomic.Value // *PhoneMetadataCollection
 )
 
+func getCurrMetadataColl() *PhoneMetadataCollection {
+	return _currMetadataColl.Load().(*PhoneMetadataCollection)
+}
+
 func MetadataCollection() (*PhoneMetadataCollection, error) {
-	if !reloadMetadata {
-		return currMetadataColl, nil
+	if _currMetadataColl.Load() != nil {
+		return getCurrMetadataColl(), nil
 	}
 
-	rawBytes, err := decodeUnzipString(metadataData)
+	rawBytes, err := decodeUnzipString(getMetadataData())
 	if err != nil {
 		return nil, err
 	}
 
 	var metadataCollection = &PhoneMetadataCollection{}
 	err = proto.Unmarshal(rawBytes, metadataCollection)
-	reloadMetadata = false
 	return metadataCollection, err
 }
 
@@ -993,7 +992,7 @@ func normalizeHelper(number string,
 
 // GetSupportedRegions returns all regions the library has metadata for.
 func GetSupportedRegions() map[string]bool {
-	return supportedRegions
+	return getSupportedRegions()
 }
 
 // GetSupportedCallingCodes returns all country calling codes the library has metadata for, covering both non-geographical
@@ -1001,12 +1000,12 @@ func GetSupportedRegions() map[string]bool {
 // used to populate a drop-down box of country calling codes for a phone-number widget, for
 // instance.
 func GetSupportedCallingCodes() map[int]bool {
-	return supportedCallingCodes
+	return getSupportedCallingCodes()
 }
 
 // GetSupportedGlobalNetworkCallingCodes returns all global network calling codes the library has metadata for.
 func GetSupportedGlobalNetworkCallingCodes() map[int]bool {
-	return countryCodesForNonGeographicalRegion
+	return getCountryCodesForNonGeographicalRegion()
 }
 
 // Helper function to check if the national prefix formatting rule has the
@@ -1035,13 +1034,13 @@ func isNumberGeographical(phoneNumber *PhoneNumber) bool {
 
 // Helper function to check region code is not unknown or null.
 func isValidRegionCode(regionCode string) bool {
-	valid := supportedRegions[regionCode]
+	valid := getSupportedRegions()[regionCode]
 	return len(regionCode) != 0 && valid
 }
 
 // Helper function to check the country calling code is valid.
 func hasValidCountryCallingCode(countryCallingCode int) bool {
-	_, containsKey := countryCodeToRegion[countryCallingCode]
+	_, containsKey := getCountryCodeToRegion()[countryCallingCode]
 	return containsKey
 }
 
@@ -2059,7 +2058,7 @@ func getMetadataForRegion(regionCode string) *PhoneMetadata {
 }
 
 func getMetadataForNonGeographicalRegion(countryCallingCode int) *PhoneMetadata {
-	_, ok := countryCodeToRegion[countryCallingCode]
+	_, ok := getCountryCodeToRegion()[countryCallingCode]
 	if !ok {
 		return nil
 	}
@@ -2133,7 +2132,7 @@ func IsValidNumberForRegion(number *PhoneNumber, regionCode string) bool {
 // geocoding at the region level.
 func GetRegionCodeForNumber(number *PhoneNumber) string {
 	var countryCode int = int(number.GetCountryCode())
-	var regions []string = countryCodeToRegion[countryCode]
+	var regions []string = getCountryCodeToRegion()[countryCode]
 	if len(regions) == 0 {
 		return ""
 	}
@@ -2175,7 +2174,7 @@ func getRegionCodeForNumberFromRegionList(
 // value "001" will be returned (corresponding to the value for World in
 // the UN M.49 schema).
 func GetRegionCodeForCountryCode(countryCallingCode int) string {
-	var regionCodes []string = countryCodeToRegion[countryCallingCode]
+	var regionCodes []string = getCountryCodeToRegion()[countryCallingCode]
 	if len(regionCodes) == 0 {
 		return UNKNOWN_REGION
 	}
@@ -2187,7 +2186,7 @@ func GetRegionCodeForCountryCode(countryCallingCode int) string {
 // code 001 is returned. Also, in the case of no region code being found,
 // an empty list is returned.
 func GetRegionCodesForCountryCode(countryCallingCode int) []string {
-	var regionCodes []string = countryCodeToRegion[countryCallingCode]
+	var regionCodes []string = getCountryCodeToRegion()[countryCallingCode]
 	return regionCodes
 }
 
@@ -2490,7 +2489,7 @@ func extractCountryCode(fullNumber, nationalNumber *Builder) int {
 	)
 	for i := 1; i <= MAX_LENGTH_COUNTRY_CODE && i <= numberLength; i++ {
 		potentialCountryCode, _ = strconv.Atoi(string(fullNumBytes[0:i]))
-		if _, ok := countryCodeToRegion[potentialCountryCode]; ok {
+		if _, ok := getCountryCodeToRegion()[potentialCountryCode]; ok {
 			nationalNumber.Write(fullNumBytes[i:])
 			return potentialCountryCode
 		}
@@ -3224,20 +3223,53 @@ func IsMobileNumberPortableRegion(regionCode string) bool {
 }
 
 func init() {
-	// load our regions
-	regionMap, err := loadIntStringArrayMap(regionMapData)
+	err := loadDataAndAtomicReplaceVar()
 	if err != nil {
 		panic(err)
 	}
-	countryCodeToRegion = regionMap.Map
+}
+
+func loadDataAndAtomicReplaceVar() (err error) {
+	// load our regions
+	regionMap, err := loadIntStringArrayMap(getRegionMapData())
+	if err != nil {
+		return fmt.Errorf("failed to load RegionMapData, err:%s", err)
+	}
+
+	timezoneMap, err := loadIntStringArrayMap(getTimezoneMapData())
+	if err != nil {
+		return fmt.Errorf("failed to load TimezoneMapData, err:%s", err)
+	}
 
 	// then our metadata
-	err = loadMetadataFromFile("US", 1)
+	metadataCollection, err := MetadataCollection()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to load Metadata, err:%s", err)
 	}
 
-	for eKey, regionCodes := range countryCodeToRegion {
+	metadataList := metadataCollection.GetMetadata()
+	if len(metadataList) == 0 {
+		panic(ErrEmptyMetadata)
+	}
+
+	countryCodeToNonGeographicalMetadataMap := make(map[int]*PhoneMetadata)
+	regionToMetadataMap := make(map[string]*PhoneMetadata)
+
+	for _, meta := range metadataList {
+		region := meta.GetId()
+		if region == "001" {
+			// it's a non geographical entity
+			countryCodeToNonGeographicalMetadataMap[int(meta.GetCountryCode())] = meta
+		} else {
+			regionToMetadataMap[region] = meta
+		}
+	}
+
+	countryCodesForNonGeographicalRegion := make(map[int]bool, 16)
+	supportedRegions := make(map[string]bool, 320)
+	supportedCallingCodes := make(map[int]bool, 320)
+
+	for eKey, regionCodes := range regionMap.Map {
 		// We can assume that if the county calling code maps to the
 		// non-geo entity region code then that's the only region code
 		// it maps to.
@@ -3262,17 +3294,49 @@ func init() {
 	// and log (or not log).
 	delete(supportedRegions, REGION_CODE_FOR_NON_GEO_ENTITY)
 
-	for _, val := range countryCodeToRegion[NANPA_COUNTRY_CODE] {
-		writeToNanpaRegions(val, struct{}{})
+	nanpaRegions := make(map[string]struct{})
+	for _, val := range regionMap.Map[NANPA_COUNTRY_CODE] {
+		nanpaRegions[val] = struct{}{}
 	}
 
-	// Create our sync.Onces for each of our languages for carriers
-	for lang := range carrierMapData {
-		carrierOnces[lang] = &sync.Once{}
+	// carriers
+	carrierPrefixMap := make(map[string]*intStringMap)
+	for lang := range getCarrierMapData() {
+		prefixMap, err := loadPrefixMap(getCarrierMapData()[lang])
+		if err != nil {
+			return fmt.Errorf("failed to load CarrierMapData PrefixMap for lang:%s, err:%s", lang, err)
+		}
+		carrierPrefixMap[lang] = prefixMap
 	}
-	for lang := range geocodingMapData {
-		geocodingOnces[lang] = &sync.Once{}
+	// 
+	geocodingPrefixMap := make(map[string]*intStringMap)
+	for lang := range getGeocodingMapData() {
+		prefixMap, err := loadPrefixMap(getGeocodingMapData()[lang])
+		if err != nil {
+			return fmt.Errorf("failed to load GeocodingMapData PrefixMap for lang:%s, err:%s", lang, err)
+		}
+		geocodingPrefixMap[lang] = prefixMap
 	}
+
+	// atomic replace map
+	_countryCodeToNonGeographicalMetadataMap.Store(countryCodeToNonGeographicalMetadataMap)
+	_regionToMetadataMap.Store(regionToMetadataMap)
+
+	_nanpaRegions.Store(nanpaRegions)
+
+	_countryCodeToRegion.Store(regionMap.Map)
+	_timezoneMap.Store(timezoneMap)
+
+	_countryCodesForNonGeographicalRegion.Store(countryCodesForNonGeographicalRegion)
+	_supportedRegions.Store(supportedRegions)
+	_supportedCallingCodes.Store(supportedCallingCodes)
+
+	_carrierPrefixMap.Store(carrierPrefixMap)
+	_geocodingPrefixMap.Store(geocodingPrefixMap)
+
+	// extra atomic replace map
+	_currMetadataColl.Store(metadataCollection)
+	return nil
 }
 
 // GetTimezonesForPrefix returns a slice of Timezones corresponding to the number passed
@@ -3280,24 +3344,15 @@ func init() {
 // The algorythm tries to match the timezones starting from the maximum
 // number of phone number digits and decreasing until it finds one or reaches 0
 func GetTimezonesForPrefix(number string) ([]string, error) {
-	var err error
-	timezoneOnce.Do(func() {
-		timezoneMap, err = loadIntStringArrayMap(timezoneMapData)
-	})
-
-	if timezoneMap == nil {
-		return nil, fmt.Errorf("error loading timezone map: %v", err)
-	}
-
 	// strip any leading +
 	number = strings.TrimLeft(number, "+")
 
-	for i := timezoneMap.MaxLength; i > 0; i-- {
+	for i := getTimezoneMap().MaxLength; i > 0; i-- {
 		index, err := strconv.Atoi(number[0:i])
 		if err != nil {
 			return nil, err
 		}
-		tzs, found := timezoneMap.Map[index]
+		tzs, found := getTimezoneMap().Map[index]
 		if found {
 			return tzs, nil
 		}
@@ -3312,20 +3367,12 @@ func GetTimezonesForNumber(number *PhoneNumber) ([]string, error) {
 	return GetTimezonesForPrefix(e164)
 }
 
-func getValueForNumber(onceMap map[string]*sync.Once, langMap map[string]*intStringMap, binMap map[string]string, language string, maxLength int, number *PhoneNumber) (string, error) {
+func getValueForNumber(langMap map[string]*intStringMap, binMap map[string]string, language string, maxLength int, number *PhoneNumber) (string, error) {
 	// do we have data for this language
 	_, existing := binMap[language]
 	if !existing {
 		return "", nil
 	}
-
-	// load it into our map
-	onceMap[language].Do(func() {
-		prefixMap, err := loadPrefixMap(binMap[language])
-		if err == nil {
-			langMap[language] = prefixMap
-		}
-	})
 
 	// do we have a map for this language?
 	prefixMap, ok := langMap[language]
@@ -3354,7 +3401,8 @@ func getValueForNumber(onceMap map[string]*sync.Once, langMap map[string]*intStr
 // GetCarrierForNumber returns the carrier we believe the number belongs to. Note due
 // to number porting this is only a guess, there is no guarantee to its accuracy.
 func GetCarrierForNumber(number *PhoneNumber, lang string) (string, error) {
-	carrier, err := getValueForNumber(carrierOnces, carrierPrefixMap, carrierMapData, lang, 10, number)
+	carrierPrefixMap, carrierMapData := getCarrierPrefixMap(), getCarrierMapData()
+	carrier, err := getValueForNumber(carrierPrefixMap, carrierMapData, lang, 10, number)
 	if err != nil {
 		return "", err
 	}
@@ -3363,13 +3411,14 @@ func GetCarrierForNumber(number *PhoneNumber, lang string) (string, error) {
 	}
 
 	// fallback to english
-	return getValueForNumber(carrierOnces, carrierPrefixMap, carrierMapData, "en", 10, number)
+	return getValueForNumber(carrierPrefixMap, carrierMapData, "en", 10, number)
 }
 
 // GetGeocodingForNumber returns the location we think the number was first acquired in. This is
 // just our best guess, there is no guarantee to its accuracy.
 func GetGeocodingForNumber(number *PhoneNumber, lang string) (string, error) {
-	geocoding, err := getValueForNumber(geocodingOnces, geocodingPrefixMap, geocodingMapData, lang, 10, number)
+	geocodingPrefixMap, geocodingMapData := getGeocodingPrefixMap(), getGeocodingMapData()
+	geocoding, err := getValueForNumber(geocodingPrefixMap, geocodingMapData, lang, 10, number)
 	if err != nil {
 		return "", err
 	}
@@ -3378,5 +3427,5 @@ func GetGeocodingForNumber(number *PhoneNumber, lang string) (string, error) {
 	}
 
 	// fallback to english
-	return getValueForNumber(geocodingOnces, geocodingPrefixMap, geocodingMapData, "en", 10, number)
+	return getValueForNumber(geocodingPrefixMap, geocodingMapData, "en", 10, number)
 }
